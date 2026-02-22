@@ -51,30 +51,47 @@ if ($productId) {
 
   <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js';
-import { MindARThree } from 'https://cdn.jsdelivr.net/npm/mind-ar@1.1.5/dist/mindar-image-three.prod.js';
+import * as ZapparThree from 'https://cdn.jsdelivr.net/npm/@zappar/zappar-threejs@1.0.19/dist/zappar-threejs.module.js';
 
 const productImg = <?php echo json_encode($productImg); ?>;
 const productSize = <?php echo json_encode($productSize); ?>;
 
-const mindar = new MindARThree({
-  container: document.body,
-  imageTargetSrc: './assets/targets/measurement.mind'
-});
+// Renderer + scene + Zappar camera
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-const { renderer, scene, camera } = mindar;
-const anchor = mindar.addAnchor(0);
+const camera = new ZapparThree.Camera();
+const scene = new THREE.Scene();
 
-// local anchor group will move with the detected target
-const anchorGroup = anchor.group;
+// Add a simple light so placed meshes look ok
+const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+scene.add(light);
+
+// Create an image tracker. Place your Zappar image target file at assets/targets/measurement.zpt
+let tracker = null;
+try {
+  tracker = new ZapparThree.ImageTrackerLoader().load('./assets/targets/measurement.zpt');
+} catch (e) {
+  console.warn('Failed to create ImageTracker:', e);
+}
+
+// Anchor group that follows the detected image target
+let anchorGroup = new THREE.Group();
+if (tracker) {
+  anchorGroup = new ZapparThree.ImageAnchorGroup(tracker, camera);
+}
+scene.add(anchorGroup);
 
 // helper plane (in anchor local space) used for raycasting
 const planeGeo = new THREE.PlaneGeometry(1, 1);
 const planeMat = new THREE.MeshBasicMaterial({ visible: false });
 const anchorPlane = new THREE.Mesh(planeGeo, planeMat);
-anchorPlane.rotation.x = -Math.PI / 2; // align if needed; keep at z=0
+anchorPlane.rotation.x = -Math.PI / 2;
 anchorGroup.add(anchorPlane);
 
-// storage
+// storage for points/lines/labels
 const points = [];
 const lines = [];
 const labels = [];
@@ -88,15 +105,14 @@ const pointer = new THREE.Vector2();
 function screenToRaycaster(x, y){
   pointer.x = (x / window.innerWidth) * 2 - 1;
   pointer.y = -(y / window.innerHeight) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
+  raycaster.setFromCamera(pointer, camera.camera ? camera.camera : camera);
   return raycaster.intersectObject(anchorPlane, false);
 }
 
 function placePointFromScreen(x, y){
   const hits = screenToRaycaster(x, y);
   if (!hits.length) return false;
-  const worldPoint = hits[0].point; // world coords
-  // convert world point to anchor local
+  const worldPoint = hits[0].point;
   const local = anchorGroup.worldToLocal(worldPoint.clone());
 
   const p = new THREE.Mesh(pointGeo, pointMat.clone());
@@ -113,7 +129,7 @@ function placePointFromScreen(x, y){
     anchorGroup.add(line);
     lines.push(line);
 
-    const d = a.distanceTo(b); // units relative to anchor (anchor width = 1 unit)
+    const d = a.distanceTo(b);
     const label = makeLabel((d * getScaleFactor()).toFixed(2) + ' m');
     const mid = new THREE.Vector3().addVectors(a,b).multiplyScalar(0.5);
     label.position.copy(mid).add(new THREE.Vector3(0,0.02,0));
@@ -143,9 +159,8 @@ function makeLabel(text){
 }
 
 function getScaleFactor(){
-  // assume anchorPlane width = 1 unit equals the image target width
   const cm = parseFloat(document.getElementById('targetWidth').value) || 1;
-  return (cm/100); // meters per 1 unit
+  return (cm/100);
 }
 
 function undo(){
@@ -169,17 +184,14 @@ function calculateSizes(){
   return { length: (unique[0]||0)*getScaleFactor(), width:(unique[1]||0)*getScaleFactor() };
 }
 
-// Tile preview: simple textured plane bounded by convex hull of points (if >=3)
 let tileMesh=null;
 function updateTilePreview(){
   if (tileMesh){ anchorGroup.remove(tileMesh); tileMesh.geometry.dispose(); tileMesh.material.map.dispose(); tileMesh.material.dispose(); tileMesh=null; }
   if (points.length < 3) return;
-  // build simple geometry using points order
   const verts = [];
   points.forEach(p=>verts.push(p.position.x,p.position.y,p.position.z));
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(verts,3));
-  // naive triangulation (fan)
   const indices=[]; for(let i=1;i<points.length-1;i++) indices.push(0,i,i+1);
   geometry.setIndex(indices); geometry.computeVertexNormals();
   const tex = new THREE.TextureLoader().load(productImg || 'noImage.png');
@@ -190,7 +202,6 @@ function updateTilePreview(){
 }
 
 document.getElementById('btnPlace').addEventListener('click', ()=>{
-  // use center of screen placement as fallback
   if (!placePointFromScreen(window.innerWidth/2, window.innerHeight/2)) alert('Target not visible or placement failed. Aim camera at the printed target and wait until detected.');
 });
 document.getElementById('btnUndo').addEventListener('click', undo);
@@ -199,25 +210,31 @@ document.getElementById('btnConfirm').addEventListener('click', ()=>{
   const {length,width} = calculateSizes();
   const lengthFixed = parseFloat(length.toFixed(2));
   const widthFixed = parseFloat(width.toFixed(2));
-  // postMessage to opener (same fallback as original)
   try{ if (window.opener && !window.opener.closed){ window.opener.postMessage({type:'ar-measurement', length:lengthFixed, width:widthFixed, productId: <?php echo json_encode($productId); ?>}, '*'); try{ window.close(); }catch(e){} return; }}catch(e){}
   alert('Measurements: '+lengthFixed+' m x '+widthFixed+' m');
 });
 
-// place by tapping screen when anchor is found
-window.addEventListener('pointerdown', (e)=>{
-  // only place when anchor visible
-  if (anchor.visible) placePointFromScreen(e.clientX, e.clientY);
-});
+window.addEventListener('pointerdown', (e)=>{ if (anchorGroup.visible) placePointFromScreen(e.clientX, e.clientY); });
 
-anchor.onTargetFound = () => { document.getElementById('status').textContent = 'Target found — place points'; };
-anchor.onTargetLost = () => { document.getElementById('status').textContent = 'Target lost — aim camera at target'; };
+// status updates based on anchor visibility
+const statusEl = document.getElementById('status');
+function updateStatus(){
+  if (!tracker) { statusEl.textContent = 'Tracker not loaded — place a target .zpt at assets/targets/measurement.zpt'; return; }
+  statusEl.textContent = anchorGroup.visible ? 'Target found — place points' : 'Target lost — aim camera at target';
+}
 
-await mindar.start();
-renderer.setAnimationLoop(()=>{ renderer.render(scene,camera); });
+// Animation / render loop
+function animate(){
+  try { if (camera && typeof camera.updateFrame === 'function') camera.updateFrame(renderer); else if (camera && typeof camera.update === 'function') camera.update(); } catch(e) { console.warn('camera update error', e); }
+  updateStatus();
+  renderer.render(scene, camera.camera ? camera.camera : camera);
+  requestAnimationFrame(animate);
+}
+
+animate();
 
 // expose for debugging
-window._mindar = mindar;
+window._zappar = { camera, tracker, anchorGroup };
   </script>
 </body>
 </html>
