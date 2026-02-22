@@ -40,6 +40,7 @@ if ($productId) {
     <div><strong>AR Measurement (image target)</strong></div>
     <div style="margin-top:6px">Target width (cm): <input id="targetWidth" value="21"/></div>
     <div style="margin-top:6px">
+      <button id="btnInit">Init Tracking</button>
       <button id="btnPlace">Place point</button>
       <button id="btnUndo">Undo</button>
       <button id="btnClear">Clear</button>
@@ -96,6 +97,9 @@ const anchorPlane = new THREE.Mesh(planeGeo, planeMat);
 anchorPlane.rotation.x = -Math.PI / 2;
 anchorGroup.add(anchorPlane);
 
+// snapping tolerance (meters)
+const SNAP_DISTANCE = 0.03; // 3 cm
+
 // storage for points/lines/labels
 const points = [];
 const lines = [];
@@ -119,9 +123,21 @@ function placePointFromScreen(x, y){
   if (!hits.length) return false;
   const worldPoint = hits[0].point;
   const local = anchorGroup.worldToLocal(worldPoint.clone());
+  // snap to nearby existing point if within SNAP_DISTANCE
+  let snapTarget = null;
+  for (let i = 0; i < points.length; i++) {
+    const dist = local.distanceTo(points[i].position);
+    if (dist < SNAP_DISTANCE && (snapTarget === null || dist < local.distanceTo(snapTarget.position))) {
+      snapTarget = points[i];
+    }
+  }
 
   const p = new THREE.Mesh(pointGeo, pointMat.clone());
-  p.position.copy(local);
+  if (snapTarget) {
+    p.position.copy(snapTarget.position);
+  } else {
+    p.position.copy(local);
+  }
   anchorGroup.add(p);
   points.push(p);
 
@@ -211,6 +227,20 @@ document.getElementById('btnPlace').addEventListener('click', ()=>{
 });
 document.getElementById('btnUndo').addEventListener('click', undo);
 document.getElementById('btnClear').addEventListener('click', clearAll);
+document.getElementById('btnInit').addEventListener('click', initTracking);
+
+function initTracking(){
+  // Attempt to start camera and tracker and provide user feedback
+  try { if (camera && typeof camera.start === 'function') camera.start(); } catch(e){ console.warn('camera.start failed', e); }
+  try { if (tracker && typeof tracker.setAnchorPoseFromCameraOffset === 'function') {
+      // try to set an initial anchor slightly in front of camera
+      tracker.setAnchorPoseFromCameraOffset(0, 0, -1);
+    }
+  } catch(e) { /* non-fatal */ }
+  statusEl.textContent = 'Initializing tracking — move device slowly';
+  // small delay then update status
+  setTimeout(()=>{ statusEl.textContent = anchorGroup.visible ? 'Tracking — place points' : 'Not tracking — move device to initialize tracking'; }, 1500);
+}
 function sendMeasurements(){
   if (points.length < 3) {
     alert('Please place at least 3 points to measure a surface.');
