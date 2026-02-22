@@ -49,6 +49,7 @@ if ($productId) {
     <div style="margin-top:6px;font-size:12px;color:#444">Markerless mode: no image target required (Instant World Tracker)</div>
   </div>
   <div id="status">Waiting for target...</div>
+  <div id="error-box" style="position:fixed;right:12px;bottom:12px;z-index:10000;background:#ffe6e6;color:#600;padding:10px;border-radius:6px;display:none;max-width:360px;box-shadow:0 2px 6px rgba(0,0,0,0.2)"></div>
 
   <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js';
@@ -56,6 +57,21 @@ import * as ZapparThree from 'https://cdn.jsdelivr.net/npm/@zappar/zappar-threej
 
 const productImg = <?php echo json_encode($productImg); ?>;
 const productSize = <?php echo json_encode($productSize); ?>;
+
+// Global error handlers to surface runtime problems on-screen
+function showError(msg){
+  console.error(msg);
+  const el = document.getElementById('error-box');
+  if(el){ el.textContent = typeof msg === 'string' ? msg : (msg && msg.message) || JSON.stringify(msg); el.style.display = 'block'; }
+  const statusEl = document.getElementById('status'); if(statusEl) statusEl.textContent = 'Error: see details';
+}
+window.addEventListener('error', (e)=>{ showError(e.message || e.error || 'Unknown error'); });
+window.addEventListener('unhandledrejection', (e)=>{ showError(e.reason || 'Unhandled promise rejection'); });
+
+// Quick capability check
+if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+  showError('Camera API not available in this browser. Use a modern mobile browser or enable camera permissions.');
+}
 
 // Renderer + scene + Zappar camera
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
