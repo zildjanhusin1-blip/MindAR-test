@@ -24,7 +24,7 @@
     </div>
     <div style="margin-top:6px;font-size:12px;color:#444">Markerless mode: no image target required (Instant World Tracker)</div>
     <div style="margin-top:8px;font-size:12px;color:#444">
-      <button id="btnCheckCam">Check Camera</button>
+      <button id="btnCheckCam" onclick="checkCamera()">Check Camera</button>
       <button id="btnClearDebug">Clear Logs</button>
     </div>
     <div id="debug-box" style="margin-top:8px;max-width:320px;max-height:180px;overflow:auto;background:#f7f7f7;border:1px solid #ddd;padding:8px;border-radius:6px;font-size:12px;color:#333;display:none"></div>
@@ -61,6 +61,53 @@ function debugLog(msg){
   el.scrollTop = el.scrollHeight;
 }
 function clearDebug(){ const el=document.getElementById('debug-box'); if(el){ el.innerHTML=''; el.style.display='none'; } }
+
+// small toast for visible feedback (useful on iOS when alerts/popups suppressed)
+function showToast(msg, timeout=2500){
+  let t = document.getElementById('__debug_toast');
+  if(!t){ t = document.createElement('div'); t.id='__debug_toast'; t.style.position='fixed'; t.style.left='50%'; t.style.transform='translateX(-50%)'; t.style.bottom='90px'; t.style.padding='8px 12px'; t.style.background='rgba(0,0,0,0.8)'; t.style.color='#fff'; t.style.borderRadius='8px'; t.style.zIndex='10001'; t.style.fontSize='14px'; document.body.appendChild(t); }
+  t.textContent = msg; t.style.display='block';
+  clearTimeout(t._to); t._to = setTimeout(()=>{ t.style.display='none'; }, timeout);
+}
+
+// Unified camera check called by multiple event types
+async function checkCamera(){
+  try{ showToast('Camera check…'); }catch(e){}
+  clearDebug(); debugLog('checkCamera invoked'); console.log('checkCamera invoked');
+  try{ alert('Starting camera check — you should see a permission prompt'); }catch(e){}
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    debugLog('navigator.mediaDevices.getUserMedia NOT available');
+    showToast('getUserMedia unavailable');
+    return;
+  }
+  const btn = document.getElementById('btnCheckCam'); if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
+  try{
+    const constraints = { video: { facingMode: 'environment' } };
+    debugLog('requesting permission with constraints: ' + JSON.stringify(constraints));
+    const s = await navigator.mediaDevices.getUserMedia(constraints);
+    debugLog('getUserMedia OK — obtained stream with ' + s.getTracks().length + ' track(s)');
+    showToast('Camera access granted');
+    s.getTracks().forEach(t=>{ debugLog('stopping track: ' + t.kind); t.stop(); });
+  }catch(err){
+    debugLog('getUserMedia error: ' + (err && err.name) + ' — ' + (err && err.message));
+    console.error(err);
+    showToast('Camera access failed');
+    // Fallback for devices/browsers that block getUserMedia: trigger file input capture
+    try{
+      debugLog('Attempting file-input capture fallback');
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'video/*,image/*';
+      input.capture = 'environment';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      input.addEventListener('change', ()=>{ debugLog('Fallback input change, files: ' + (input.files && input.files.length)); document.body.removeChild(input); showToast('Fallback input used'); });
+      input.click();
+    }catch(fbErr){ debugLog('Fallback failed: ' + (fbErr && fbErr.message)); console.error(fbErr); }
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Check Camera'; }
+  }
+}
 
 
 // Quick capability check
