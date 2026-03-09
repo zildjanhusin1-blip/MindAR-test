@@ -247,6 +247,7 @@ document.getElementById('btnInit').addEventListener('click', initTracking);
 
 document.getElementById('btnCheckCam').addEventListener('click', async ()=>{
   clearDebug(); debugLog('Checking navigator.mediaDevices.getUserMedia...');
+  try{ alert('Starting camera check — you should see a permission prompt'); }catch(e){}
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     debugLog('navigator.mediaDevices.getUserMedia NOT available');
     return;
@@ -260,6 +261,18 @@ document.getElementById('btnCheckCam').addEventListener('click', async ()=>{
   }catch(err){
     debugLog('getUserMedia error: ' + (err && err.name) + ' — ' + (err && err.message));
     console.error(err);
+    // Fallback for devices/browsers that block getUserMedia: trigger file input capture
+    try{
+      debugLog('Attempting file-input capture fallback');
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'video/*,image/*';
+      input.capture = 'environment';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      input.addEventListener('change', ()=>{ debugLog('Fallback input change, files: ' + (input.files && input.files.length)); document.body.removeChild(input); });
+      input.click();
+    }catch(fbErr){ debugLog('Fallback failed: ' + (fbErr && fbErr.message)); console.error(fbErr); }
   }
 });
 document.getElementById('btnClearDebug').addEventListener('click', clearDebug);
