@@ -2,24 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WebAR Measure</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>AR Room Measure</title>
 
 <style>
-body{
-margin:0;
-overflow:hidden;
-font-family:system-ui;
-}
+body{margin:0;overflow:hidden;font-family:system-ui}
 
 #ui{
 position:fixed;
 top:10px;
 left:10px;
-background:rgba(255,255,255,.9);
+background:rgba(255,255,255,.95);
 padding:10px;
-border-radius:8px;
-z-index:100;
+border-radius:10px;
+z-index:10
 }
 
 #status{
@@ -27,9 +23,9 @@ position:fixed;
 bottom:10px;
 left:10px;
 background:rgba(0,0,0,.7);
-color:white;
+color:#fff;
 padding:8px;
-border-radius:6px;
+border-radius:6px
 }
 </style>
 </head>
@@ -38,63 +34,67 @@ border-radius:6px;
 
 <div id="ui">
 <button id="start">Start AR</button>
+<button id="undo">Undo</button>
 <button id="clear">Clear</button>
+<div id="area">Area: 0 m²</div>
 </div>
 
-<div id="status">Tap Start AR</div>
+<div id="status">Tap Start</div>
 
 <script type="module">
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js";
 import * as ZapparThree from "https://cdn.jsdelivr.net/npm/@zappar/zappar-threejs@1.0.19/dist/zappar-threejs.module.js";
 
+/* ---------------- INIT ---------------- */
+
 ZapparThree.browserIncompatibleUI();
 ZapparThree.permissionDeniedUI();
 
-/* ---------- renderer ---------- */
-
-const renderer = new THREE.WebGLRenderer({antialias:true,alpha:true});
-renderer.setSize(window.innerWidth,window.innerHeight);
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setSize(innerWidth,innerHeight);
 document.body.appendChild(renderer.domElement);
 
 ZapparThree.glContextSet(renderer.getContext());
 
-/* ---------- scene ---------- */
+const scene=new THREE.Scene();
 
-const scene = new THREE.Scene();
-
-/* ---------- camera ---------- */
-
-const camera = new ZapparThree.Camera();
+const camera=new ZapparThree.Camera();
 scene.add(camera);
-
-/* ---------- light ---------- */
 
 scene.add(new THREE.HemisphereLight(0xffffff,0xbbbbff,1));
 
-/* ---------- tracker ---------- */
+const tracker=new ZapparThree.InstantWorldTracker();
+const anchor=new ZapparThree.InstantWorldAnchorGroup(tracker,camera);
+scene.add(anchor);
 
-const tracker = new ZapparThree.InstantWorldTracker();
-const anchorGroup = new ZapparThree.InstantWorldAnchorGroup(tracker,camera);
+/* ---------------- PLANE ---------------- */
 
-scene.add(anchorGroup);
-
-/* ---------- raycasting plane ---------- */
-
-const plane = new THREE.Mesh(
-new THREE.PlaneGeometry(5,5),
+const plane=new THREE.Mesh(
+new THREE.PlaneGeometry(10,10),
 new THREE.MeshBasicMaterial({visible:false})
 );
 
-plane.rotation.x = -Math.PI/2;
-anchorGroup.add(plane);
+plane.rotation.x=-Math.PI/2;
+anchor.add(plane);
 
-/* ---------- measurement storage ---------- */
+/* ---------------- DATA ---------------- */
 
 let points=[];
 let lines=[];
+let labels=[];
+let previewLine=null;
+let tileMesh=null;
 
-/* ---------- create label ---------- */
+/* ---------------- TILE TEXTURE ---------------- */
+
+const tileTexture=new THREE.TextureLoader().load(
+"https://threejs.org/examples/textures/brick_diffuse.jpg"
+);
+
+tileTexture.wrapS=tileTexture.wrapT=THREE.RepeatWrapping;
+
+/* ---------------- LABEL ---------------- */
 
 function createLabel(text){
 
@@ -113,10 +113,10 @@ ctx.textAlign="center";
 ctx.textBaseline="middle";
 ctx.fillText(text,128,64);
 
-const texture=new THREE.CanvasTexture(canvas);
+const tex=new THREE.CanvasTexture(canvas);
 
 const sprite=new THREE.Sprite(
-new THREE.SpriteMaterial({map:texture})
+new THREE.SpriteMaterial({map:tex})
 );
 
 sprite.scale.set(.25,.12,1);
@@ -124,80 +124,234 @@ sprite.scale.set(.25,.12,1);
 return sprite;
 }
 
-/* ---------- place point ---------- */
-
-function placePoint(x,y){
-
-const mouse=new THREE.Vector2(
-(x/window.innerWidth)*2-1,
--(y/window.innerHeight)*2+1
-);
+/* ---------------- RAYCAST ---------------- */
 
 const raycaster=new THREE.Raycaster();
+const mouse=new THREE.Vector2();
+
+function getPoint(x,y){
+
+mouse.x=(x/innerWidth)*2-1;
+mouse.y=-(y/innerHeight)*2+1;
 
 raycaster.setFromCamera(mouse,camera.camera);
 
 const hit=raycaster.intersectObject(plane);
 
-if(!hit.length) return;
+if(!hit.length) return null;
 
-const local=anchorGroup.worldToLocal(hit[0].point.clone());
+return anchor.worldToLocal(hit[0].point.clone());
+
+}
+
+/* ---------------- SNAP 90° ---------------- */
+
+function snapPoint(p){
+
+if(points.length<2) return p;
+
+const a=points[points.length-1].position;
+const b=points[points.length-2].position;
+
+const dir=new THREE.Vector3().subVectors(a,b).normalize();
+
+const newDir=new THREE.Vector3().subVectors(p,a).normalize();
+
+const angle=dir.angleTo(newDir);
+
+if(Math.abs(angle-Math.PI/2)<0.3){
+
+const dist=p.distanceTo(a);
+
+const perp=new THREE.Vector3(-dir.z,0,dir.x);
+
+return a.clone().add(perp.multiplyScalar(dist));
+
+}
+
+return p;
+
+}
+
+/* ---------------- PLACE POINT ---------------- */
+
+function placePoint(x,y){
+
+let p=getPoint(x,y);
+
+if(!p) return;
+
+p=snapPoint(p);
 
 const sphere=new THREE.Mesh(
 new THREE.SphereGeometry(.02,16,16),
 new THREE.MeshBasicMaterial({color:0xff7a00})
 );
 
-sphere.position.copy(local);
+sphere.position.copy(p);
 
-anchorGroup.add(sphere);
+anchor.add(sphere);
 
 points.push(sphere);
 
-/* ----- draw line ----- */
+/* line */
 
 if(points.length>=2){
 
 const a=points[points.length-2].position;
 const b=points[points.length-1].position;
 
-const geometry=new THREE.BufferGeometry().setFromPoints([a,b]);
+const geo=new THREE.BufferGeometry().setFromPoints([a,b]);
 
 const line=new THREE.Line(
-geometry,
+geo,
 new THREE.LineBasicMaterial({color:0x000000})
 );
 
-anchorGroup.add(line);
-
+anchor.add(line);
 lines.push(line);
 
-/* ----- distance ----- */
+/* label */
 
-const dist=a.distanceTo(b);
+const d=a.distanceTo(b);
 
-const label=createLabel(dist.toFixed(2)+" m");
+const label=createLabel(d.toFixed(2)+" m");
 
 const mid=new THREE.Vector3().addVectors(a,b).multiplyScalar(.5);
 
 label.position.copy(mid);
 
-anchorGroup.add(label);
+anchor.add(label);
+
+labels.push(label);
+
+}
+
+updateArea();
+updateTile();
+
+}
+
+/* ---------------- LIVE PREVIEW ---------------- */
+
+function updatePreview(x,y){
+
+if(points.length==0) return;
+
+let p=getPoint(x,y);
+
+if(!p) return;
+
+p=snapPoint(p);
+
+const last=points[points.length-1].position;
+
+const geo=new THREE.BufferGeometry().setFromPoints([last,p]);
+
+if(!previewLine){
+
+previewLine=new THREE.Line(
+geo,
+new THREE.LineDashedMaterial({color:0x00ff00,dashSize:.05,gapSize:.05})
+);
+
+anchor.add(previewLine);
+
+}else{
+
+previewLine.geometry.dispose();
+previewLine.geometry=geo;
 
 }
 
 }
 
-/* ---------- pointer tap ---------- */
+/* ---------------- AREA ---------------- */
 
-window.addEventListener("pointerdown",(e)=>{
+function updateArea(){
 
-if(anchorGroup.visible)
+if(points.length<3) return;
+
+let area=0;
+
+for(let i=0;i<points.length;i++){
+
+const a=points[i].position;
+const b=points[(i+1)%points.length].position;
+
+area+=a.x*b.z-b.x*a.z;
+
+}
+
+area=Math.abs(area)/2;
+
+document.getElementById("area").innerText=
+"Area: "+area.toFixed(2)+" m²";
+
+}
+
+/* ---------------- TILE PREVIEW ---------------- */
+
+function updateTile(){
+
+if(tileMesh){
+
+anchor.remove(tileMesh);
+tileMesh.geometry.dispose();
+tileMesh.material.dispose();
+
+}
+
+if(points.length<3) return;
+
+const verts=[];
+
+points.forEach(p=>{
+verts.push(p.position.x,p.position.y,p.position.z)
+});
+
+const geo=new THREE.BufferGeometry();
+
+geo.setAttribute(
+"position",
+new THREE.Float32BufferAttribute(verts,3)
+);
+
+const idx=[];
+
+for(let i=1;i<points.length-1;i++)
+idx.push(0,i,i+1);
+
+geo.setIndex(idx);
+
+const mat=new THREE.MeshBasicMaterial({
+map:tileTexture,
+side:THREE.DoubleSide
+});
+
+tileMesh=new THREE.Mesh(geo,mat);
+
+anchor.add(tileMesh);
+
+}
+
+/* ---------------- INPUT ---------------- */
+
+window.addEventListener("pointerdown",e=>{
+
+if(anchor.visible)
 placePoint(e.clientX,e.clientY);
 
 });
 
-/* ---------- start AR ---------- */
+window.addEventListener("pointermove",e=>{
+
+if(anchor.visible)
+updatePreview(e.clientX,e.clientY);
+
+});
+
+/* ---------------- UI ---------------- */
 
 document.getElementById("start").onclick=()=>{
 
@@ -209,26 +363,48 @@ camera.start();
 
 tracker.setAnchorPoseFromCameraOffset(0,0,-1);
 
-document.getElementById("status").textContent=
-"Move phone slowly, tap to measure";
+document.getElementById("status").innerText=
+"Move phone slowly then tap to measure";
 
 });
 
 };
 
-/* ---------- clear ---------- */
+document.getElementById("undo").onclick=()=>{
 
-document.getElementById("clear").onclick=()=>{
+if(points.length==0) return;
 
-points.forEach(p=>anchorGroup.remove(p));
-lines.forEach(l=>anchorGroup.remove(l));
+const p=points.pop();
+anchor.remove(p);
 
-points=[];
-lines=[];
+if(lines.length){
+anchor.remove(lines.pop());
+}
+
+if(labels.length){
+anchor.remove(labels.pop());
+}
+
+updateArea();
+updateTile();
 
 };
 
-/* ---------- render loop ---------- */
+document.getElementById("clear").onclick=()=>{
+
+points.forEach(p=>anchor.remove(p));
+lines.forEach(l=>anchor.remove(l));
+labels.forEach(l=>anchor.remove(l));
+
+points=[];
+lines=[];
+labels=[];
+
+updateArea();
+
+};
+
+/* ---------------- LOOP ---------------- */
 
 function animate(){
 
@@ -243,6 +419,5 @@ requestAnimationFrame(animate);
 animate();
 
 </script>
-
 </body>
 </html>
