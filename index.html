@@ -23,6 +23,11 @@
       <button id="btnConfirm">Confirm</button>
     </div>
     <div style="margin-top:6px;font-size:12px;color:#444">Markerless mode: no image target required (Instant World Tracker)</div>
+    <div style="margin-top:8px;font-size:12px;color:#444">
+      <button id="btnCheckCam">Check Camera</button>
+      <button id="btnClearDebug">Clear Logs</button>
+    </div>
+    <div id="debug-box" style="margin-top:8px;max-width:320px;max-height:180px;overflow:auto;background:#f7f7f7;border:1px solid #ddd;padding:8px;border-radius:6px;font-size:12px;color:#333;display:none"></div>
   </div>
   <div id="status">Waiting for target...</div>
   <div id="error-box" style="position:fixed;right:12px;bottom:12px;z-index:10000;background:#ffe6e6;color:#600;padding:10px;border-radius:6px;display:none;max-width:360px;box-shadow:0 2px 6px rgba(0,0,0,0.2)"></div>
@@ -44,6 +49,19 @@ function showError(msg){
 }
 window.addEventListener('error', (e)=>{ showError(e.message || e.error || 'Unknown error'); });
 window.addEventListener('unhandledrejection', (e)=>{ showError(e.reason || 'Unhandled promise rejection'); });
+
+// Debug helpers
+function debugLog(msg){
+  const el = document.getElementById('debug-box');
+  if(!el) return;
+  el.style.display = 'block';
+  const time = new Date().toLocaleTimeString();
+  const row = document.createElement('div'); row.textContent = `[${time}] ${msg}`;
+  el.appendChild(row);
+  el.scrollTop = el.scrollHeight;
+}
+function clearDebug(){ const el=document.getElementById('debug-box'); if(el){ el.innerHTML=''; el.style.display='none'; } }
+
 
 // Quick capability check
 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -80,7 +98,12 @@ scene.add(anchorGroup);
 
 // Start camera if available
 try {
-  if (camera && typeof camera.start === 'function') camera.start();
+  debugLog && debugLog('calling camera.start()');
+  if (camera && typeof camera.start === 'function') {
+    try { camera.start(); debugLog('camera.start() succeeded'); } catch(e) { debugLog('camera.start() threw: ' + (e && e.message)); console.warn('camera.start failed', e); }
+  } else {
+    debugLog('camera.start() not available');
+  }
 } catch(e) { console.warn('camera.start failed', e); }
 
 // helper plane (in anchor local space) used for raycasting
@@ -221,6 +244,25 @@ document.getElementById('btnPlace').addEventListener('click', ()=>{
 document.getElementById('btnUndo').addEventListener('click', undo);
 document.getElementById('btnClear').addEventListener('click', clearAll);
 document.getElementById('btnInit').addEventListener('click', initTracking);
+
+document.getElementById('btnCheckCam').addEventListener('click', async ()=>{
+  clearDebug(); debugLog('Checking navigator.mediaDevices.getUserMedia...');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    debugLog('navigator.mediaDevices.getUserMedia NOT available');
+    return;
+  }
+  try{
+    const constraints = { video: { facingMode: 'environment' } };
+    debugLog('requesting permission with constraints: ' + JSON.stringify(constraints));
+    const s = await navigator.mediaDevices.getUserMedia(constraints);
+    debugLog('getUserMedia OK — obtained stream with ' + s.getTracks().length + ' track(s)');
+    s.getTracks().forEach(t=>{ debugLog('stopping track: ' + t.kind); t.stop(); });
+  }catch(err){
+    debugLog('getUserMedia error: ' + (err && err.name) + ' — ' + (err && err.message));
+    console.error(err);
+  }
+});
+document.getElementById('btnClearDebug').addEventListener('click', clearDebug);
 
 function initTracking(){
   // Attempt to start camera and tracker and provide user feedback
